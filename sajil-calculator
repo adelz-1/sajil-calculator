@@ -1,20 +1,10 @@
-# تثبيت Firebase CLI
-npm install -g firebase-tools
-
-# تسجيل الدخول
-firebase login --no-localhost
-
-# إنشاء مجلد
-mkdir sajil-site && cd sajil-site
-
-# إنشاء الملفات
-cat > index.html << 'EOF'
 <!DOCTYPE html>
 <html dir="rtl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ساجل - حاسبة التأجير</title>
+
 <style>
 @import url("https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap");
 * { font-family: "Tajawal", sans-serif; box-sizing: border-box; margin: 0; padding: 0; }
@@ -159,4 +149,981 @@ input:disabled, select:disabled { background: #E8EEED; color: var(--sajil-gray);
 .firebase-status {
     position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
     padding: 8px 20px; border-radius: 20px; font-size: 13px; font-weight: 700;
-    z-index:
+    z-index: 999; transition: all 0.3s; display: none;
+}
+.firebase-status.show { display: block; }
+.firebase-status.connected { background: #E8F5F2; color: var(--sajil-teal-dark); border: 2px solid var(--sajil-teal); }
+.firebase-status.disconnected { background: #FFEBEE; color: var(--sajil-red); border: 2px solid #FFCDD2; }
+.firebase-status.syncing { background: #FFF8E1; color: var(--sajil-gold); border: 2px dashed var(--sajil-gold); }
+.firebase-status.offline { background: #E3F2FD; color: #1976D2; border: 2px solid #1976D2; }
+.dark-mode .card, .dark-mode .login-box { background: #1a2a28; }
+.dark-mode .section, .dark-mode .admin-panel { background: #243534; }
+.dark-mode input, .dark-mode select { background: #1e2e2d; color: #e0e8e6; border-color: #2a3a38; }
+.dark-mode .manager-box { background: #1e2e2d; border-color: #2a3a38; }
+.dark-mode .item-row { background: #243534; border-color: #2a3a38; }
+.dark-mode .history-item { background: #243534; }
+.dark-mode .price-box { background: linear-gradient(135deg, #1a3a36, #0f2a28); }
+.dark-mode .results { background: linear-gradient(145deg, #1a3a36, #0f2a28); }
+.dark-mode .title, .dark-mode .header h1, .dark-mode .section h3, .dark-mode .lock-control label, .dark-mode .manager-box h4 { color: #e0e8e6; }
+.dark-mode .subtitle, .dark-mode .header p { color: #8a9b99; }
+.dark-mode .result-row { color: #e0e8e6; }
+@media (max-width: 768px) {
+    .grid { grid-template-columns: 1fr; }
+    .title { font-size: 26px; }
+    .header h1 { font-size: 22px; }
+    .card { padding: 20px; }
+    .add-row { grid-template-columns: 1fr; }
+}
+</style>
+<base target="_blank">
+</head>
+<body>
+
+<div class="firebase-status" id="firebaseStatus"></div>
+
+<div class="top-bar">
+    <div style="display:flex;align-items:center;gap:10px;">
+        <div style="font-size:24px;font-weight:900;color:var(--sajil-teal);">ساجل</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <button class="theme-btn" id="themeBtn">🌙</button>
+        <button class="lang-btn" id="langBtn">EN</button>
+        <button class="lang-btn" id="logoutBtn" style="display:none;">🚪 خروج</button>
+    </div>
+</div>
+
+<div class="main-content">
+    <div id="app"></div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+const firebaseConfig = {
+    apiKey: "AIzaSyDzJyX-KT-aFJ3COtk8VT2ohgdqflx1MoI",
+    authDomain: "sajil-reantal.firebaseapp.com",
+    projectId: "sajil-reantal",
+    storageBucket: "sajil-reantal.firebasestorage.app",
+    messagingSenderId: "166546636607",
+    appId: "1:166546636607:web:a4d9131642473fd1055d8a"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const settingsRef = doc(db, "settings", "global");
+
+// Enable offline persistence
+try {
+    enableIndexedDbPersistence(db);
+    console.log("Offline persistence enabled");
+} catch (e) {
+    console.log("Persistence already enabled or not supported");
+}
+
+let currentLang = localStorage.getItem("sajil_lang") || "ar";
+let isDarkMode = localStorage.getItem("sajil_dark") === "true";
+let isLoggedIn = false;
+let isAdmin = false;
+let adminPanelOpen = false;
+let history = [];
+let currentPrice = 0;
+let isSaving = false;
+let settingsLoaded = false;
+let firebaseConnected = false;
+
+const STORAGE_KEY = "sajil_admin_settings_v1";
+
+let defaultCars = [
+    {name: "-- اختر سيارة --", price: 0},
+    {name: "هيونداي أي تن - 2024", price: 112},
+    {name: "كيا بيجاس - 2023", price: 112},
+    {name: "سوزوكي ديزاير - 2023", price: 112},
+    {name: "تويوتا يارس - 2025", price: 177},
+    {name: "جيلي إمجراند - 2026", price: 149},
+    {name: "هيونداي اكسنت - 2026", price: 161},
+    {name: "النترا - 2025", price: 177},
+    {name: "لاند كروزر - 2025", price: 1290},
+];
+
+let adminState = {
+    carPriceLocked: false, manualPriceLocked: false, insurancePriceLocked: false,
+    taxRateLocked: false, offerRateLocked: false,
+    cars: JSON.parse(JSON.stringify(defaultCars)),
+    customOffers: [{name: "عرض الصيف", discount: 10}, {name: "عرض الويكند", discount: 15}],
+    customMemberships: [{name: "عميل جديد", discount: 0}, {name: "عميل قديم", discount: 5}],
+    users: [
+        {username: "adelz", password: "Aa1422", role: "user"},
+        {username: "adel", password: "1122", role: "admin"}
+    ],
+    lastUpdated: 0
+};
+
+const T = {
+    ar: {
+        appTitle: "ساجل - حاسبة التأجير",
+        loginTitle: "تسجيل الدخول", loginSubtitle: "حاسبة تأجير السيارات",
+        username: "اسم المستخدم", password: "كلمة المرور",
+        loginBtn: "دخول", loginError: "بيانات غير صحيحة",
+        calcTitle: "حاسبة التأجير", calcSubtitle: "احسب تكلفة التأجير بسهولة",
+        adminPanel: "الإدارة", historyBtn: "السجل", exportBtn: "تصدير",
+        logoutBtn: "خروج",
+        carInfo: "معلومات السيارة", selectCar: "-- اختر سيارة --",
+        dailyPrice: "السعر اليومي:", priceUnknown: "غير معروف",
+        enterManual: "أدخل السعر يدوياً", carUnavailable: "أدخل السعر:",
+        days: "عدد الأيام", customerInfo: "معلومات العميل",
+        noOffer: "بدون عرض", insurance: "التأمين", enableInsurance: "تفعيل التأمين",
+        insurancePrice: "سعر التأمين اليومي", taxCalc: "الضرائب", taxRate: "نسبة الضريبة %",
+        calculate: "احسب الإجمالي", carLabel: "السيارة:", amount: "المبلغ:",
+        membershipDiscount: "خصم العضوية", insuranceLabel: "التأمين:",
+        totalBefore: "المجموع قبل الخصم:", offerDiscount: "خصم العرض:",
+        afterDiscount: "بعد الخصم:", taxLabel: "الضريبة", finalTotal: "الإجمالي النهائي:",
+        returnDate: "تاريخ الإرجاع:", manualPriceTag: "(يدوي)",
+        selectCarError: "اختر سيارة", enterManualError: "أدخل السعر",
+        noHistory: "لا توجد عمليات", historyTitle: "سجل العمليات",
+        adminSettingsTitle: "لوحة الإدارة", saved: "تم الحفظ",
+        lockCar: "قفل سعر السيارة", lockManual: "قفل السعر اليدوي",
+        lockInsurance: "قفل التأمين", lockTax: "قفل الضريبة",
+        lockOffer: "قفل الخصم", locked: "مقفل", unlocked: "مفتوح",
+        offerManager: "العروض", offerName: "اسم العرض", offerPercent: "%",
+        addOffer: "إضافة", delete: "حذف",
+        membershipManager: "العضويات", membershipName: "اسم العضوية",
+        addMembership: "إضافة",
+        carManager: "السيارات", carName: "اسم السيارة", carPrice: "السعر",
+        addCar: "إضافة سيارة",
+        userManager: "المستخدمين", userName: "اسم المستخدم", userPass: "كلمة المرور",
+        addUser: "إضافة",
+        resetSettings: "إعادة الضبط",
+        resetConfirm: "متأكد من إعادة الضبط؟",
+        resetSuccess: "تم إعادة الضبط",
+        enterOfferName: "أدخل اسم العرض", enterValidDiscount: "نسبة خصم صحيحة",
+        enterMembershipName: "أدخل اسم العضوية",
+        enterCarName: "أدخل اسم السيارة", enterValidPrice: "سعر صحيح",
+        enterUserName: "أدخل اسم المستخدم", enterPassword: "أدخل كلمة المرور",
+        deleteConfirm: "متأكد من الحذف؟",
+        adminOnly: "للإدارة فقط",
+        perDay: "ريال/يوم", daysLabel: "أيام", withInsurance: "مع تأمين",
+        noDiscount: "بدون خصم", currency: "ريال", customer: "عميل",
+        lightMode: "☀️", darkMode: "🌙",
+        firebaseConnected: "متصل",
+        firebaseDisconnected: "غير متصل - يستخدم التخزين المحلي",
+        firebaseSyncing: "جاري الحفظ...",
+        firebaseOffline: "وضع عدم الاتصال"
+    },
+    en: {
+        appTitle: "Sajil - Rental Calculator",
+        loginTitle: "Login", loginSubtitle: "Car Rental Calculator",
+        username: "Username", password: "Password",
+        loginBtn: "Login", loginError: "Invalid credentials",
+        calcTitle: "Rental Calculator", calcSubtitle: "Calculate rental cost easily",
+        adminPanel: "Admin", historyBtn: "History", exportBtn: "Export",
+        logoutBtn: "Logout",
+        carInfo: "Car Info", selectCar: "-- Select Car --",
+        dailyPrice: "Daily Price:", priceUnknown: "Unknown",
+        enterManual: "Enter price manually", carUnavailable: "Enter price:",
+        days: "Days", customerInfo: "Customer Info",
+        noOffer: "No Offer", insurance: "Insurance", enableInsurance: "Enable Insurance",
+        insurancePrice: "Daily Insurance", taxCalc: "Taxes", taxRate: "Tax Rate %",
+        calculate: "Calculate Total", carLabel: "Car:", amount: "Amount:",
+        membershipDiscount: "Membership Discount", insuranceLabel: "Insurance:",
+        totalBefore: "Total Before Discount:", offerDiscount: "Offer Discount:",
+        afterDiscount: "After Discount:", taxLabel: "Tax", finalTotal: "Final Total:",
+        returnDate: "Return Date:", manualPriceTag: "(Manual)",
+        selectCarError: "Select a car", enterManualError: "Enter price",
+        noHistory: "No transactions", historyTitle: "Transaction History",
+        adminSettingsTitle: "Admin Panel", saved: "Saved",
+        lockCar: "Lock Car Price", lockManual: "Lock Manual Price",
+        lockInsurance: "Lock Insurance", lockTax: "Lock Tax",
+        lockOffer: "Lock Discount", locked: "Locked", unlocked: "Unlocked",
+        offerManager: "Offers", offerName: "Offer Name", offerPercent: "%",
+        addOffer: "Add", delete: "Delete",
+        membershipManager: "Memberships", membershipName: "Membership Name",
+        addMembership: "Add",
+        carManager: "Cars", carName: "Car Name", carPrice: "Price",
+        addCar: "Add Car",
+        userManager: "Users", userName: "Username", userPass: "Password",
+        addUser: "Add",
+        resetSettings: "Reset",
+        resetConfirm: "Reset all settings?",
+        resetSuccess: "Reset done",
+        enterOfferName: "Enter offer name", enterValidDiscount: "Valid discount",
+        enterMembershipName: "Enter membership name",
+        enterCarName: "Enter car name", enterValidPrice: "Valid price",
+        enterUserName: "Enter username", enterPassword: "Enter password",
+        deleteConfirm: "Delete?",
+        adminOnly: "Admin only",
+        perDay: "SAR/day", daysLabel: "days", withInsurance: "With Insurance",
+        noDiscount: "No Discount", currency: "SAR", customer: "Customer",
+        lightMode: "☀️", darkMode: "🌙",
+        firebaseConnected: "Connected",
+        firebaseDisconnected: "Offline - using local storage",
+        firebaseSyncing: "Saving...",
+        firebaseOffline: "Offline mode"
+    }
+};
+
+function t(k) { return T[currentLang][k] || k; }
+
+function showFirebaseStatus(status) {
+    const el = document.getElementById("firebaseStatus");
+    if (!el) return;
+    el.className = "firebase-status show " + status;
+    if (status === "connected") el.textContent = t("firebaseConnected");
+    else if (status === "disconnected") el.textContent = t("firebaseDisconnected");
+    else if (status === "syncing") el.textContent = t("firebaseSyncing");
+    else if (status === "offline") el.textContent = t("firebaseOffline");
+    if (status === "connected") setTimeout(() => el.classList.remove("show"), 2000);
+}
+
+function getCleanState() {
+    return {
+        carPriceLocked: !!adminState.carPriceLocked,
+        manualPriceLocked: !!adminState.manualPriceLocked,
+        insurancePriceLocked: !!adminState.insurancePriceLocked,
+        taxRateLocked: !!adminState.taxRateLocked,
+        offerRateLocked: !!adminState.offerRateLocked,
+        cars: adminState.cars.map(c => ({name: String(c.name), price: Number(c.price) || 0})),
+        customOffers: adminState.customOffers.map(o => ({name: String(o.name), discount: Number(o.discount) || 0})),
+        customMemberships: adminState.customMemberships.map(m => ({name: String(m.name), discount: Number(m.discount) || 0})),
+        users: adminState.users.map(u => ({username: String(u.username), password: String(u.password), role: String(u.role)})),
+        lastUpdated: Date.now()
+    };
+}
+
+async function loadSettings() {
+    showFirebaseStatus("syncing");
+
+    // First try to load from localStorage immediately
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+        try {
+            const local = JSON.parse(saved);
+            if (local.users && Array.isArray(local.users)) {
+                adminState.users = local.users;
+            }
+            if (local.cars && Array.isArray(local.cars)) adminState.cars = local.cars;
+            if (local.customOffers && Array.isArray(local.customOffers)) adminState.customOffers = local.customOffers;
+            if (local.customMemberships && Array.isArray(local.customMemberships)) adminState.customMemberships = local.customMemberships;
+            adminState.carPriceLocked = !!local.carPriceLocked;
+            adminState.manualPriceLocked = !!local.manualPriceLocked;
+            adminState.insurancePriceLocked = !!local.insurancePriceLocked;
+            adminState.taxRateLocked = !!local.taxRateLocked;
+            adminState.offerRateLocked = !!local.offerRateLocked;
+            adminState.lastUpdated = local.lastUpdated || 0;
+            console.log("Loaded from localStorage:", adminState.users.length, "users");
+        } catch (e) {
+            console.error("LocalStorage parse error:", e);
+        }
+    }
+
+    // Then try Firebase
+    try {
+        const snap = await getDoc(settingsRef);
+        if (snap.exists()) {
+            const data = snap.data();
+            console.log("Firebase data loaded:", data);
+
+            const serverTime = data.lastUpdated || 0;
+            const localTime = adminState.lastUpdated || 0;
+
+            // Only use Firebase data if it is newer
+            if (serverTime >= localTime) {
+                if (data.users && Array.isArray(data.users)) adminState.users = data.users;
+                if (data.cars && Array.isArray(data.cars)) adminState.cars = data.cars;
+                if (data.customOffers && Array.isArray(data.customOffers)) adminState.customOffers = data.customOffers;
+                if (data.customMemberships && Array.isArray(data.customMemberships)) adminState.customMemberships = data.customMemberships;
+
+                adminState.carPriceLocked = !!data.carPriceLocked;
+                adminState.manualPriceLocked = !!data.manualPriceLocked;
+                adminState.insurancePriceLocked = !!data.insurancePriceLocked;
+                adminState.taxRateLocked = !!data.taxRateLocked;
+                adminState.offerRateLocked = !!data.offerRateLocked;
+                adminState.lastUpdated = serverTime;
+            }
+
+            firebaseConnected = true;
+            showFirebaseStatus("connected");
+        } else {
+            console.log("No Firebase data, creating initial...");
+            await saveSettings(true);
+            firebaseConnected = true;
+        }
+    } catch (e) {
+        console.error("Firebase load error:", e);
+        firebaseConnected = false;
+        showFirebaseStatus("disconnected");
+
+        // If no localStorage data either, use defaults
+        if (!saved) {
+            console.log("Using default settings");
+        }
+    }
+
+    settingsLoaded = true;
+    console.log("Settings loaded. Users:", adminState.users.length, "Firebase connected:", firebaseConnected);
+}
+
+async function saveSettings(silent = false) {
+    if (isSaving) return;
+    isSaving = true;
+
+    if (!silent) showFirebaseStatus("syncing");
+
+    const cleanData = getCleanState();
+
+    // Always save to localStorage first
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(cleanData));
+        console.log("Saved to localStorage");
+    } catch (e) {
+        console.error("LocalStorage save error:", e);
+    }
+
+    // Then try Firebase
+    if (firebaseConnected) {
+        try {
+            await setDoc(settingsRef, cleanData);
+            console.log("Saved to Firebase successfully");
+            adminState.lastUpdated = cleanData.lastUpdated;
+            if (!silent) showFirebaseStatus("connected");
+        } catch (e) {
+            console.error("Firebase save error:", e);
+            firebaseConnected = false;
+            if (!silent) showFirebaseStatus("disconnected");
+        }
+    } else {
+        console.log("Firebase not connected, saved to localStorage only");
+        if (!silent) showFirebaseStatus("offline");
+    }
+
+    if (!silent) {
+        const status = document.getElementById("saveStatus");
+        if (status) {
+            status.classList.add("show");
+            setTimeout(() => status.classList.remove("show"), 2000);
+        }
+    }
+
+    isSaving = false;
+}
+
+let unsubscribe = null;
+function startRealtimeListener() {
+    if (unsubscribe) unsubscribe();
+
+    console.log("Starting realtime listener...");
+
+    unsubscribe = onSnapshot(
+        settingsRef,
+        (doc) => {
+            if (doc.exists()) {
+                const data = doc.data();
+                const serverTime = data.lastUpdated || 0;
+                const localTime = adminState.lastUpdated || 0;
+
+                console.log("Firebase update received. Server:", serverTime, "Local:", localTime);
+
+                // Only update if server data is newer (allow 2 second buffer)
+                if (serverTime > localTime + 2000) {
+                    console.log("Updating from server...");
+
+                    if (data.users && Array.isArray(data.users)) adminState.users = data.users;
+                    if (data.cars && Array.isArray(data.cars)) adminState.cars = data.cars;
+                    if (data.customOffers && Array.isArray(data.customOffers)) adminState.customOffers = data.customOffers;
+                    if (data.customMemberships && Array.isArray(data.customMemberships)) adminState.customMemberships = data.customMemberships;
+
+                    adminState.carPriceLocked = !!data.carPriceLocked;
+                    adminState.manualPriceLocked = !!data.manualPriceLocked;
+                    adminState.insurancePriceLocked = !!data.insurancePriceLocked;
+                    adminState.taxRateLocked = !!data.taxRateLocked;
+                    adminState.offerRateLocked = !!data.offerRateLocked;
+                    adminState.lastUpdated = serverTime;
+
+                    // Save to localStorage to keep in sync
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(getCleanState()));
+
+                    if (isLoggedIn) renderApp();
+                }
+
+                firebaseConnected = true;
+                showFirebaseStatus("connected");
+            }
+        },
+        (error) => {
+            console.error("Realtime listener error:", error.code, error.message);
+            firebaseConnected = false;
+
+            if (error.code === 'permission-denied') {
+                console.error("Permission denied! Check Firestore Rules.");
+                showFirebaseStatus("disconnected");
+            } else {
+                showFirebaseStatus("offline");
+            }
+        }
+    );
+}
+
+function setLanguage(lang) {
+    currentLang = lang;
+    localStorage.setItem("sajil_lang", lang);
+    document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+    document.documentElement.lang = lang;
+    document.title = t("appTitle");
+    if (isLoggedIn) renderApp(); else renderLogin();
+}
+
+function toggleTheme() {
+    isDarkMode = !isDarkMode;
+    localStorage.setItem("sajil_dark", isDarkMode);
+    document.body.classList.toggle("dark-mode", isDarkMode);
+    document.getElementById("themeBtn").innerHTML = isDarkMode ? t("lightMode") : t("darkMode");
+}
+
+function requireAdmin() {
+    if (!isAdmin) { alert(t("adminOnly")); return false; }
+    return true;
+}
+
+function renderLogin() {
+    document.getElementById("app").innerHTML = `
+        <div class="card">
+            <div class="login-box">
+                <div class="title" style="font-size:26px;">${t("loginTitle")}</div>
+                <div class="subtitle">${t("loginSubtitle")}</div>
+                <input type="text" id="username" placeholder="${t("username")}" autocomplete="off">
+                <input type="password" id="password" placeholder="${t("password")}" autocomplete="off">
+                <button class="btn-calc" id="loginBtnAction" style="margin-top:12px;">${t("loginBtn")}</button>
+                <div id="loginError"></div>
+            </div>
+        </div>
+    `;
+    document.getElementById("loginBtnAction").addEventListener("click", doLogin);
+    document.getElementById("password").addEventListener("keypress", e => { if (e.key === "Enter") doLogin(); });
+}
+
+function doLogin() {
+    const u = document.getElementById("username").value.trim();
+    const p = document.getElementById("password").value;
+
+    console.log("Login attempt:", u, "Users available:", adminState.users.length);
+    console.log("Current users:", adminState.users.map(u => u.username));
+
+    const user = adminState.users.find(x => x.username === u && x.password === p);
+    if (user) {
+        isLoggedIn = true;
+        isAdmin = user.role === "admin";
+        document.getElementById("logoutBtn").style.display = "block";
+        renderApp();
+    } else {
+        document.getElementById("loginError").innerHTML = `<div class="error">${t("loginError")}</div>`;
+        document.getElementById("password").value = "";
+    }
+}
+
+function renderApp() {
+    if (!isLoggedIn) { renderLogin(); return; }
+
+    const carOptions = adminState.cars.map((c, i) => 
+        `<option value="${i}">${c.name}${c.price > 0 ? ' - ' + c.price + ' ' + t("currency") : ''}</option>`
+    ).join("");
+
+    const offerOptions = `<option value="0">${t("noOffer")}</option>` + 
+        adminState.customOffers.map(o => `<option value="${o.discount}">${o.name} (-${o.discount}%)</option>`).join("");
+
+    const membershipOptions = adminState.customMemberships.map(m => 
+        `<option value="${m.discount}">${m.name}${m.discount > 0 ? ' (-' + m.discount + '%)' : ''}</option>`
+    ).join("");
+
+    const adminBtn = isAdmin ? 
+        `<button class="header-btn btn-admin" id="adminPanelBtn">${t("adminPanel")}</button>` : '';
+
+    document.getElementById("app").innerHTML = `
+        <div class="card">
+            <div class="header">
+                <div>
+                    <h1>${t("calcTitle")}</h1>
+                    <p>${t("calcSubtitle")}</p>
+                </div>
+                <div class="header-btns">
+                    ${adminBtn}
+                    <button class="header-btn btn-info" id="historyBtn">${t("historyBtn")}</button>
+                    ${isAdmin ? `<button class="header-btn btn-warn" id="exportBtn">${t("exportBtn")}</button>` : ''}
+                    <button class="header-btn btn-danger" id="logoutBtnAction">${t("logoutBtn")}</button>
+                </div>
+            </div>
+            ${isAdmin && adminPanelOpen ? renderAdminPanel() : ''}
+            <div class="grid">
+                <div class="section">
+                    <h3>${t("carInfo")}</h3>
+                    <select id="carSelect" ${adminState.carPriceLocked ? 'disabled' : ''}>${carOptions}</select>
+                    <div id="priceBox" class="price-box"><span class="label">${t("dailyPrice")}</span><span class="value">-</span></div>
+                    <div id="manualPriceBox" style="display:none;">
+                        <div style="background:linear-gradient(135deg,#FFF8E1,#FFECB3);border:2px dashed var(--sajil-gold);border-radius:14px;padding:18px;margin:12px 0;text-align:center;">
+                            <label style="color:#8B6914;font-size:17px;font-weight:700;display:block;margin-bottom:10px;">${t("carUnavailable")}</label>
+                            <input type="number" id="manualPrice" placeholder="${t("dailyPrice")}" min="0" step="0.01" value="0" ${adminState.manualPriceLocked ? 'disabled' : ''}>
+                        </div>
+                    </div>
+                    <input type="number" id="days" value="1" min="1" placeholder="${t("days")}">
+                </div>
+                <div class="section" style="border-top-color:var(--sajil-gold);">
+                    <h3>${t("customerInfo")}</h3>
+                    <select id="customerType">${membershipOptions}</select>
+                    <select id="offerSelect">${offerOptions}</select>
+                </div>
+                <div class="section" style="border-top-color:var(--sajil-teal-dark);">
+                    <h3>${t("insurance")}</h3>
+                    <label style="display:flex;align-items:center;gap:10px;font-size:17px;font-weight:600;color:var(--sajil-dark);cursor:pointer;margin:8px 0;">
+                        <input type="checkbox" id="insuranceCheck" style="width:22px;height:22px;margin:0;"> ${t("enableInsurance")}
+                    </label>
+                    <input type="number" id="insurancePrice" value="0" min="0" step="0.01" placeholder="${t("insurancePrice")}" ${adminState.insurancePriceLocked ? 'disabled' : ''}>
+                </div>
+                <div class="section" style="border-top-color:var(--sajil-dark);">
+                    <h3>${t("taxCalc")}</h3>
+                    <input type="number" id="taxRate" value="15" min="0" step="0.01" placeholder="${t("taxRate")}" ${adminState.taxRateLocked ? 'disabled' : ''}>
+                </div>
+            </div>
+            <button class="btn-calc" id="calcBtn">${t("calculate")}</button>
+            <div id="results"></div>
+        </div>
+    `;
+
+    document.getElementById("carSelect").addEventListener("change", updateCarPrice);
+    if (document.getElementById("adminPanelBtn")) {
+        document.getElementById("adminPanelBtn").addEventListener("click", toggleAdminPanel);
+    }
+    document.getElementById("historyBtn").addEventListener("click", showHistory);
+    if (document.getElementById("exportBtn")) {
+        document.getElementById("exportBtn").addEventListener("click", exportData);
+    }
+    document.getElementById("logoutBtnAction").addEventListener("click", doLogout);
+    document.getElementById("calcBtn").addEventListener("click", doCalculate);
+}
+
+function renderAdminPanel() {
+    const renderLock = (label, field) => `
+        <div class="lock-control">
+            <label>${t(label)}</label>
+            <div class="lock-toggle">
+                <span class="lock-status">${adminState[field] ? t("locked") : t("unlocked")}</span>
+                <input type="checkbox" class="lock-checkbox" data-field="${field}" ${adminState[field] ? 'checked' : ''}>
+            </div>
+        </div>
+    `;
+
+    const renderList = (items, valueKey, nameKey, deleteClass) => 
+        items.map((item, i) => `
+            <div class="item-row">
+                <span>${item[nameKey]}</span>
+                <span class="item-value">${item[valueKey]}${valueKey === 'discount' ? '%' : ' ' + t("currency")}</span>
+                <button class="${deleteClass}" data-index="${i}">${t("delete")}</button>
+            </div>
+        `).join("");
+
+    const renderCarList = () => 
+        adminState.cars.slice(1).map((item, i) => `
+            <div class="item-row" style="flex-wrap:wrap;gap:8px;">
+                <span style="flex:1;min-width:150px;">${item.name}</span>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <input type="number" class="car-price-input" data-index="${i + 1}" value="${item.price}" min="0" step="0.01" style="width:85px;height:38px;margin:0;font-size:15px;padding:6px 10px;">
+                    <span class="item-value" style="margin:0;">${t("currency")}</span>
+                </div>
+                <div style="display:flex;gap:4px;">
+                    <button class="move-car" data-index="${i}" data-dir="-1" ${i === 0 ? 'disabled style="opacity:0.3;"' : ''} style="background:var(--sajil-teal);color:var(--sajil-dark);border:none;border-radius:6px;padding:6px 10px;font-size:13px;cursor:pointer;font-weight:700;">▲</button>
+                    <button class="move-car" data-index="${i}" data-dir="1" ${i === adminState.cars.slice(1).length - 1 ? 'disabled style="opacity:0.3;"' : ''} style="background:var(--sajil-teal);color:var(--sajil-dark);border:none;border-radius:6px;padding:6px 10px;font-size:13px;cursor:pointer;font-weight:700;">▼</button>
+                    <button class="delete-car" data-index="${i}" style="background:var(--sajil-red);color:white;border:none;border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;font-weight:700;">${t("delete")}</button>
+                </div>
+            </div>
+        `).join("");
+
+    const renderUserList = () => 
+        adminState.users.map((user, i) => `
+            <div class="item-row">
+                <span>${user.username}</span>
+                <span class="item-value">${user.role === 'admin' ? 'Admin' : 'User'}</span>
+                ${user.username !== 'adel' ? `<button class="delete-user" data-index="${i}">${t("delete")}</button>` : '<span></span>'}
+            </div>
+        `).join("");
+
+    const html = `
+        <div class="admin-panel">
+            <h3>${t("adminSettingsTitle")}</h3>
+            <div class="save-status" id="saveStatus">${t("saved")}</div>
+            ${renderLock("lockCar", "carPriceLocked")}
+            ${renderLock("lockManual", "manualPriceLocked")}
+            ${renderLock("lockInsurance", "insurancePriceLocked")}
+            ${renderLock("lockTax", "taxRateLocked")}
+            ${renderLock("lockOffer", "offerRateLocked")}
+            <div class="manager-box">
+                <h4>${t("offerManager")}</h4>
+                <div style="margin-bottom:12px;">${renderList(adminState.customOffers, "discount", "name", "delete-offer")}</div>
+                <div class="add-row">
+                    <input type="text" id="newOfferName" placeholder="${t("offerName")}">
+                    <input type="number" id="newOfferValue" placeholder="${t("offerPercent")}" min="0" max="100" step="0.01">
+                    <button id="addOfferBtn">${t("addOffer")}</button>
+                </div>
+            </div>
+            <div class="manager-box">
+                <h4>${t("membershipManager")}</h4>
+                <div style="margin-bottom:12px;">${renderList(adminState.customMemberships, "discount", "name", "delete-membership")}</div>
+                <div class="add-row">
+                    <input type="text" id="newMembershipName" placeholder="${t("membershipName")}">
+                    <input type="number" id="newMembershipValue" placeholder="%" min="0" max="100" step="0.01">
+                    <button id="addMembershipBtn">${t("addMembership")}</button>
+                </div>
+            </div>
+            <div class="manager-box">
+                <h4>${t("carManager")}</h4>
+                <div style="margin-bottom:12px;">${renderCarList()}</div>
+                <div class="add-row">
+                    <input type="text" id="newCarName" placeholder="${t("carName")}">
+                    <input type="number" id="newCarValue" placeholder="${t("carPrice")}" min="0" step="0.01">
+                    <button id="addCarBtn">${t("addCar")}</button>
+                </div>
+            </div>
+            <div class="manager-box">
+                <h4>${t("userManager")}</h4>
+                <div style="margin-bottom:12px;">${renderUserList()}</div>
+                <div class="add-row" style="grid-template-columns: 1fr 1fr 1fr auto;">
+                    <input type="text" id="newUserName" placeholder="${t("userName")}">
+                    <input type="password" id="newUserPass" placeholder="${t("userPass")}">
+                    <select id="newUserRole" style="margin-bottom:0;">
+                        <option value="user">${t("customer")}</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                    <button id="addUserBtn">${t("addUser")}</button>
+                </div>
+            </div>
+            <div style="text-align:center;margin-top:18px;">
+                <button class="header-btn btn-danger" id="resetBtn">${t("resetSettings")}</button>
+            </div>
+        </div>
+    `;
+
+    setTimeout(() => {
+        document.querySelectorAll('.lock-checkbox').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                if (!requireAdmin()) { e.target.checked = !e.target.checked; return; }
+                adminState[e.target.dataset.field] = e.target.checked;
+                saveSettings();
+                renderApp();
+            });
+        });
+
+        document.querySelectorAll('.delete-offer').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                if (!requireAdmin()) return;
+                if (confirm(t("deleteConfirm"))) {
+                    adminState.customOffers.splice(parseInt(e.target.dataset.index), 1);
+                    saveSettings();
+                    renderApp();
+                }
+            });
+        });
+
+        document.querySelectorAll('.delete-membership').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                if (!requireAdmin()) return;
+                if (confirm(t("deleteConfirm"))) {
+                    adminState.customMemberships.splice(parseInt(e.target.dataset.index), 1);
+                    saveSettings();
+                    renderApp();
+                }
+            });
+        });
+
+        document.querySelectorAll('.car-price-input').forEach(input => {
+            input.addEventListener('change', (e) => {
+                if (!requireAdmin()) return;
+                const idx = parseInt(e.target.dataset.index);
+                const price = parseFloat(e.target.value);
+                if (isNaN(price) || price < 0) { alert(t("enterValidPrice")); renderApp(); return; }
+                adminState.cars[idx].price = price;
+                saveSettings();
+            });
+        });
+
+        document.querySelectorAll('.move-car').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                if (!requireAdmin()) return;
+                const idx = parseInt(e.target.dataset.index);
+                const dir = parseInt(e.target.dataset.dir);
+                const actualIdx = idx + 1;
+                const targetIdx = actualIdx + dir;
+                if (targetIdx < 1 || targetIdx >= adminState.cars.length) return;
+                [adminState.cars[actualIdx], adminState.cars[targetIdx]] = [adminState.cars[targetIdx], adminState.cars[actualIdx]];
+                saveSettings();
+                renderApp();
+            });
+        });
+
+        document.querySelectorAll('.delete-car').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                if (!requireAdmin()) return;
+                if (confirm(t("deleteConfirm"))) {
+                    adminState.cars.splice(parseInt(e.target.dataset.index) + 1, 1);
+                    saveSettings();
+                    renderApp();
+                }
+            });
+        });
+
+        document.querySelectorAll('.delete-user').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                if (!requireAdmin()) return;
+                if (confirm(t("deleteConfirm"))) {
+                    adminState.users.splice(parseInt(e.target.dataset.index), 1);
+                    saveSettings();
+                    renderApp();
+                }
+            });
+        });
+
+        document.getElementById('addOfferBtn').addEventListener('click', () => {
+            if (!requireAdmin()) return;
+            const name = document.getElementById("newOfferName").value.trim();
+            const discount = parseFloat(document.getElementById("newOfferValue").value) || 0;
+            if (!name) { alert(t("enterOfferName")); return; }
+            if (discount <= 0 || discount > 100) { alert(t("enterValidDiscount")); return; }
+            adminState.customOffers.push({name, discount});
+            saveSettings();
+            renderApp();
+        });
+
+        document.getElementById('addMembershipBtn').addEventListener('click', () => {
+            if (!requireAdmin()) return;
+            const name = document.getElementById("newMembershipName").value.trim();
+            const discount = parseFloat(document.getElementById("newMembershipValue").value) || 0;
+            if (!name) { alert(t("enterMembershipName")); return; }
+            if (discount < 0 || discount > 100) { alert(t("enterValidDiscount")); return; }
+            adminState.customMemberships.push({name, discount});
+            saveSettings();
+            renderApp();
+        });
+
+        document.getElementById('addCarBtn').addEventListener('click', () => {
+            if (!requireAdmin()) return;
+            const name = document.getElementById("newCarName").value.trim();
+            const price = parseFloat(document.getElementById("newCarValue").value) || 0;
+            if (!name) { alert(t("enterCarName")); return; }
+            if (price < 0) { alert(t("enterValidPrice")); return; }
+            adminState.cars.push({name, price});
+            saveSettings();
+            renderApp();
+        });
+
+        document.getElementById('addUserBtn').addEventListener('click', async () => {
+            if (!requireAdmin()) return;
+
+            const username = document.getElementById("newUserName").value.trim();
+            const password = document.getElementById("newUserPass").value;
+            const role = document.getElementById("newUserRole").value;
+
+            if (!username) { alert(t("enterUserName")); return; }
+            if (!password) { alert(t("enterPassword")); return; }
+            if (adminState.users.find(u => u.username === username)) { 
+                alert("Username exists!"); 
+                return; 
+            }
+
+            adminState.users.push({username, password, role});
+
+            console.log("Adding user:", username, "Total users now:", adminState.users.length);
+
+            await saveSettings();
+            renderApp();
+            alert("User added successfully!");
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            if (!requireAdmin()) return;
+            if (confirm(t("resetConfirm"))) {
+                adminState = {
+                    carPriceLocked: false, manualPriceLocked: false, insurancePriceLocked: false,
+                    taxRateLocked: false, offerRateLocked: false,
+                    cars: JSON.parse(JSON.stringify(defaultCars)),
+                    customOffers: [{name: "عرض الصيف", discount: 10}, {name: "عرض الويكند", discount: 15}],
+                    customMemberships: [{name: "عميل جديد", discount: 0}, {name: "عميل قديم", discount: 5}],
+                    users: [{username: "adelz", password: "Aa1422", role: "user"}, {username: "adel", password: "1122", role: "admin"}],
+                    lastUpdated: Date.now()
+                };
+                saveSettings();
+                renderApp();
+                alert(t("resetSuccess"));
+            }
+        });
+    }, 0);
+
+    return html;
+}
+
+function toggleAdminPanel() {
+    if (!requireAdmin()) return;
+    adminPanelOpen = !adminPanelOpen;
+    renderApp();
+}
+
+function updateCarPrice() {
+    const idx = parseInt(document.getElementById("carSelect").value);
+    const car = adminState.cars[idx];
+    const priceBox = document.getElementById("priceBox");
+    const manualBox = document.getElementById("manualPriceBox");
+
+    if (idx === 0) {
+        priceBox.innerHTML = `<span class="label">${t("dailyPrice")}</span><span class="value">-</span>`;
+        manualBox.style.display = "none";
+        currentPrice = 0;
+    } else if (car.price === 0) {
+        priceBox.innerHTML = `<span class="label">${t("priceUnknown")}</span><span class="value">${t("enterManual")}</span>`;
+        manualBox.style.display = "block";
+        currentPrice = 0;
+    } else {
+        priceBox.innerHTML = `<span class="label">${t("dailyPrice")}</span><span class="value">${car.price} ${t("currency")}</span>`;
+        manualBox.style.display = "none";
+        currentPrice = car.price;
+    }
+}
+
+function doCalculate() {
+    const idx = parseInt(document.getElementById("carSelect").value);
+    const car = adminState.cars[idx];
+
+    if (idx === 0) {
+        document.getElementById("results").innerHTML = `<div class="error" style="margin-top:18px;">${t("selectCarError")}</div>`;
+        return;
+    }
+
+    let price = car.price;
+    if (price === 0) {
+        const manualPrice = parseFloat(document.getElementById("manualPrice").value) || 0;
+        if (manualPrice <= 0) {
+            document.getElementById("results").innerHTML = `<div class="error" style="margin-top:18px;">${t("enterManualError")}</div>`;
+            return;
+        }
+        price = manualPrice;
+    }
+
+    const days = parseInt(document.getElementById("days").value) || 1;
+    const membershipDiscount = parseFloat(document.getElementById("customerType").value) || 0;
+    const offer = parseFloat(document.getElementById("offerSelect").value) || 0;
+    const insPrice = parseFloat(document.getElementById("insurancePrice").value) || 0;
+    const insOn = document.getElementById("insuranceCheck").checked;
+    const tax = parseFloat(document.getElementById("taxRate").value) || 15;
+
+    const carTotal = price * days;
+    const membershipDisc = carTotal * membershipDiscount / 100;
+    const afterMembership = carTotal - membershipDisc;
+    let insTotal = 0;
+    if (insOn && insPrice > 0) insTotal = insPrice * days;
+    const beforeOffer = afterMembership + insTotal;
+    const offerDisc = beforeOffer * offer / 100;
+    const afterOffer = beforeOffer - offerDisc;
+    const taxAmount = afterOffer * tax / 100;
+    const total = afterOffer + taxAmount;
+
+    const returnDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    const membershipName = adminState.customMemberships.find(m => m.discount == membershipDiscount)?.name || t("customer");
+
+    history.unshift({
+        date: new Date().toLocaleString(currentLang === "ar" ? "ar-SA" : "en-US"),
+        car: car.name, price, days, total, customer: membershipName, insurance: insOn && insTotal > 0
+    });
+    if (history.length > 50) history.pop();
+
+    const membershipHtml = membershipDisc > 0 ? 
+        `<div class="result-row"><span>${t("membershipDiscount")} (${membershipName} - ${membershipDiscount}%):</span><span style="color:var(--sajil-teal-dark);font-weight:800;">-${membershipDisc.toFixed(2)} ${t("currency")}</span></div>` : "";
+
+    const insuranceHtml = (insOn && insTotal > 0) ? 
+        `<div class="result-row"><span>${t("insuranceLabel")}</span><span style="color:var(--sajil-teal-dark);font-weight:800;">+${insTotal.toFixed(2)} ${t("currency")}</span></div>` : "";
+
+    const priceSource = (car.price === 0) ? ` <span style="font-size:13px;color:var(--sajil-gold);font-weight:600;">${t("manualPriceTag")}</span>` : "";
+
+    document.getElementById("results").innerHTML = `
+        <div class="results">
+            <div class="result-row"><span>${t("carLabel")}</span><span>${car.name}${priceSource}</span></div>
+            <div class="result-row"><span>${t("amount")}</span><span>${price} x ${days} = ${carTotal.toFixed(2)} ${t("currency")}</span></div>
+            ${membershipHtml}
+            ${insuranceHtml}
+            <div class="result-row"><span>${t("totalBefore")}</span><span>${beforeOffer.toFixed(2)} ${t("currency")}</span></div>
+            <div class="result-row"><span>${t("offerDiscount")}</span><span style="color:var(--sajil-teal-dark);font-weight:800;">-${offerDisc.toFixed(2)} ${t("currency")} (${offer}%)</span></div>
+            <div class="result-row"><span>${t("afterDiscount")}</span><span>${afterOffer.toFixed(2)} ${t("currency")}</span></div>
+            <div class="result-row"><span>${t("taxLabel")} (${tax}%):</span><span style="color:var(--sajil-teal-dark);font-weight:800;">+${taxAmount.toFixed(2)} ${t("currency")}</span></div>
+            <div class="result-row"><span>${t("finalTotal")}</span><span>${total.toFixed(2)} ${t("currency")}</span></div>
+            <div style="text-align:center;margin-top:12px;color:var(--sajil-gray);font-size:15px;font-weight:500;">
+                ${t("returnDate")} <strong style="color:var(--sajil-teal-dark);">${returnDate.toLocaleDateString(currentLang === "ar" ? "ar-SA" : "en-US")}</strong>
+            </div>
+        </div>
+    `;
+}
+
+function showHistory() {
+    if (history.length === 0) {
+        document.getElementById("results").innerHTML = `<div style="background:var(--sajil-light);color:var(--sajil-gray);padding:35px;border-radius:14px;text-align:center;font-size:18px;font-weight:600;">${t("noHistory")}</div>`;
+        return;
+    }
+
+    const items = history.map(h => `
+        <div class="history-item">
+            <div class="history-header">
+                <span class="history-date">${h.date}</span>
+                <span class="history-total">${h.total.toFixed(2)} ${t("currency")}</span>
+            </div>
+            <div class="history-details">
+                <span>${h.car}</span>
+                <span>${h.price} ${t("perDay")}</span>
+                <span>${h.days} ${t("daysLabel")}</span>
+                <span>${h.customer}</span>
+                ${h.insurance ? `<span>${t("withInsurance")}</span>` : ""}
+            </div>
+        </div>
+    `).join("");
+
+    document.getElementById("results").innerHTML = `
+        <div style="background:white;border-radius:24px;padding:30px;box-shadow:0 20px 60px rgba(0,0,0,0.3);margin-top:18px;">
+            <h2 style="color:var(--sajil-dark);font-size:26px;font-weight:900;margin-bottom:22px;text-align:center;">${t("historyTitle")}</h2>
+            ${items}
+        </div>
+    `;
+}
+
+function exportData() {
+    if (!requireAdmin()) return;
+    const data = { history, exportDate: new Date().toISOString(), version: "3.0", adminState };
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "sajil_backup_" + new Date().toISOString().split("T")[0] + ".json";
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function doLogout() {
+    history = [];
+    isAdmin = false;
+    isLoggedIn = false;
+    adminPanelOpen = false;
+    document.getElementById("logoutBtn").style.display = "none";
+    renderLogin();
+}
+
+document.getElementById("themeBtn").addEventListener("click", toggleTheme);
+document.getElementById("langBtn").addEventListener("click", () => setLanguage(currentLang === "ar" ? "en" : "ar"));
+document.getElementById("logoutBtn").addEventListener("click", doLogout);
+
+async function init() {
+    document.documentElement.dir = currentLang === "ar" ? "rtl" : "ltr";
+    document.documentElement.lang = currentLang;
+    document.body.classList.toggle("dark-mode", isDarkMode);
+    document.getElementById("themeBtn").innerHTML = isDarkMode ? t("lightMode") : t("darkMode");
+
+    console.log("Starting Sajil with Firebase...");
+
+    await loadSettings();
+    startRealtimeListener();
+    renderLogin();
+}
+
+init();
+</script>
+</body>
+</html>
