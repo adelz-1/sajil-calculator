@@ -176,6 +176,7 @@ input:disabled, select:disabled { background: #E8EEED; color: var(--sajil-gray);
 }
 </style>
 <base target="_blank">
+<base target="_blank">
 </head>
 <body>
 
@@ -198,7 +199,7 @@ input:disabled, select:disabled { background: #E8EEED; color: var(--sajil-gray);
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getFirestore, doc, getDoc, setDoc, onSnapshot, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getDatabase, ref, get, set, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDzJyX-KT-aFJ3COtk8VT2ohgdqflx1MoI",
@@ -211,16 +212,8 @@ const firebaseConfig = {
   measurementId: "G-PY8XK0D2LJ"
 };
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const settingsRef = doc(db, "settings", "global");
-
-// Enable offline persistence
-try {
-    enableIndexedDbPersistence(db);
-    console.log("Offline persistence enabled");
-} catch (e) {
-    console.log("Persistence already enabled or not supported");
-}
+const db = getDatabase(app);
+const settingsRef = ref(db, "settings/global");
 
 let currentLang = localStorage.getItem("sajil_lang") || "ar";
 let isDarkMode = localStorage.getItem("sajil_dark") === "true";
@@ -419,9 +412,9 @@ async function loadSettings() {
 
     // Then try Firebase
     try {
-        const snap = await getDoc(settingsRef);
+        const snap = await get(settingsRef);
         if (snap.exists()) {
-            const data = snap.data();
+            const data = snap.val();
             console.log("Firebase data loaded:", data);
 
             const serverTime = data.lastUpdated || 0;
@@ -483,7 +476,7 @@ async function saveSettings(silent = false) {
     // Then try Firebase
     if (firebaseConnected) {
         try {
-            await setDoc(settingsRef, cleanData);
+            await set(settingsRef, cleanData);
             console.log("Saved to Firebase successfully");
             adminState.lastUpdated = cleanData.lastUpdated;
             if (!silent) showFirebaseStatus("connected");
@@ -514,11 +507,11 @@ function startRealtimeListener() {
 
     console.log("Starting realtime listener...");
 
-    unsubscribe = onSnapshot(
+    unsubscribe = onValue(
         settingsRef,
-        (doc) => {
-            if (doc.exists()) {
-                const data = doc.data();
+        (snapshot) => {
+            if (snapshot.exists()) {
+                const data = snapshot.val();
                 const serverTime = data.lastUpdated || 0;
                 const localTime = adminState.lastUpdated || 0;
 
