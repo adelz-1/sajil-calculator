@@ -201,14 +201,15 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebas
 import { getFirestore, doc, getDoc, setDoc, onSnapshot, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const firebaseConfig = {
-    apiKey: "AIzaSyDzJyX-KT-aFJ3COtk8VT2ohgdqflx1MoI",
-    authDomain: "sajil-reantal.firebaseapp.com",
-    projectId: "sajil-reantal",
-    storageBucket: "sajil-reantal.firebasestorage.app",
-    messagingSenderId: "166546636607",
-    appId: "1:166546636607:web:a4d9131642473fd1055d8a"
+  apiKey: "AIzaSyDzJyX-KT-aFJ3COtk8VT2ohgdqflx1MoI",
+  authDomain: "sajil-reantal.firebaseapp.com",
+  databaseURL: "https://sajil-reantal-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "sajil-reantal",
+  storageBucket: "sajil-reantal.firebasestorage.app",
+  messagingSenderId: "166546636607",
+  appId: "1:166546636607:web:96c01ed984c56fe7055d8a",
+  measurementId: "G-PY8XK0D2LJ"
 };
-
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const settingsRef = doc(db, "settings", "global");
